@@ -1,0 +1,205 @@
+[
+  {
+    "url": "https://mentari.unpam.ac.id/api/user-course?page=1&limit=12&t=1791003460376",
+    "status": 200,
+    "data": {
+      "data": [
+        {
+          "id": "2c33ab82-ca22-4079-9cf7-f28a8226e75b",
+          "kode_course": "20261-07TPLP003-22TIF0312",
+          "coursename": "[2] MANAJEMEN PROYEK INFORMATIKA # 07TPLP003 (Selasa) [P-1]",
+          "shortname": "55201-22TIF0312-07TPLP003-20261-",
+          "id_mata_kuliah": "22TIF0312",
+          "id_prodi": "55201",
+          "id_semester_registrasi": "20261",
+          "id_periode": "1",
+          "id_kelas": "07TPLP003",
+          "id_shift": "P",
+          "id_hari_waktu_kuliah": "2",
+          "nama_hari": "Selasa",
+          "nama_mata_kuliah": "MANAJEMEN PROYEK INFORMATIKA",
+          "sks": 2,
+          "createdAt": "2026-08-28T21:54:15.902Z",
+          "nama_dosen": "BUDI APRIYANTO S.Kom, M.Kom"
+        },
+        {
+          "id": "cb3d708d-47ca-4b96-939c-99bf0e578903",
+          "kode_course": "20261-07TPLP003-22TIF0373",
+          "coursename": "[3] ARSITEKTUR DAN ORGANISASI KOMPUTER # 07TPLP003 (Rabu) [P-1]",
+          "shortname": "55201-22TIF0373-07TPLP003-20261-",
+          "id_mata_kuliah": "22TIF0373",
+          "id_prodi": "55201",
+          "id_semester_registrasi": "20261",
+          "id_periode": "1",
+          "id_kelas": "07TPLP003",
+          "id_shift": "P",
+          "id_hari_waktu_kuliah": "3",
+          "nama_hari": "Rabu",
+          "nama_mata_kuliah": "ARSITEKTUR DAN ORGANISASI KOMPUTER",
+          "sks": 3,
+          "createdAt": "2026-08-28T21:54:15.902Z",
+          "nama_dosen": "NANANG S.KOM., M.KOM."
+        },
+        {
+          "id": "8e0d592c-bdc4-4f33-8bb0-f2e51d4ab9fb",
+          "kode_course": "20261-07TPLP003-22TIF0382",
+          "coursename": "[2] KEAMANAN KOMPUTER # 07TPLP003 (Jumat) [P-1]",
+          "shortname": "55201-22TIF0382-07TPLP003-20261-",
+          "id_mata_kuliah": "22TIF0382",
+          "id_prodi": "55201",
+          "id_semester_registrasi": "20261",
+          "id_periode": "1",
+          "id_kelas": "07TPLP003",
+          "id_shift": "P",
+          "id_hari_waktu_kuliah": "5",
+          "nama_hari": "Jumat",
+          "nama_mata_kuliah": "KEAMANAN KOMPUTER",
+          "sks": 2,
+          "createdAt": "2026-08-28T21:54:15.902Z",
+          "nama_dosen": "AHMAD S.Kom., M.KOM."
+        },
+        {
+          "id": "8bad4413-8040-4364-9e2b-3f000afcc02e",
+          "kode_course": "20261-07TPLP003-22TIF0392",
+          "coursename": "[2] JARINGAN NIRKABEL # 07TPLP003 (Senin) [P-1]",
+          "shortname": "55201-22TIF0392-07TPLP003-20261-",
+          "id_mata_kuliah": "22TIF0392",
+          "id_prodi": "55201",
+          "id_semester_registrasi": "20261",
+          "id_periode": "1",
+          "id_kelas": "07TPLP003",
+          "id_shift": "P",
+          "id_hari_waktu_kuliah": "1",
+          "nama_hari": "Senin",
+          "nama_mata_kuliah": "JARINGAN NIRKABEL",
+          "sks": 2,
+          "createdAt": "2026-08-28T21:54:15.902Z",
+          "nama_dosen": "JULI GUNAWAN S.T., M.Kom."
+        },
+        {
+          "id": "55ea972f-40b2-45d0-a802-6a640d1b7bbb",
+          "kode_course": "20261-07TPLP003-22TIF0402",
+          "coursename": "[2] KECAKAPAN ANTAR PERSONAL # 07TPLP003 (Rabu) [P-1]",
+          "shortname": "55201-22TIF0402-07TPLP003-20261-",
+          "id_mata_kuliah": "22TIF0402",
+          "id_prodi": "55201",
+          "id_semester_registrasi": "20261",
+          "id_periode": "1",
+          "id_kelas": "07TPLP003",
+          "id_shift": "P",
+          "id_hari_waktu_kuliah": "3",
+          "nama_hari": "Rabu",
+          "nama_mata_kuliah": "KECAKAPAN ANTAR PERSONAL",
+          "sks": 2,
+          "createdAt": "2026-08-28T21:54:15.902Z",
+          "nama_dosen": "FIFI JULFIATI A.KS.,M.Si."
+        },
+        {
+          "id": "74307038-aed1-40a4-bc67-93bb6a19bb00",
+          "kode_course": "20261-07TPLP003-22TIF0412",
+          "coursename": "[2] TESTING DAN QA PERANGKAT LUNAK # 07TPLP003 (Senin) [P-1]",
+          "shortname": "55201-22TIF0412-07TPLP003-20261-",
+          "id_mata_kuliah": "22TIF0412",
+          "id_prodi": "55201",
+          "id_semester_registrasi": "20261",
+          "id_periode": "1",
+          "id_kelas": "07TPLP003",
+          "id_shift": "P",
+          "id_hari_waktu_kuliah": "1",
+          "nama_hari": "Senin",
+          "nama_mata_kuliah": "TESTING DAN QA PERANGKAT LUNAK",
+          "sks": 2,
+          "createdAt": "2026-08-28T21:54:15.902Z",
+          "nama_dosen": "SYAFRIL CHAIRIANSYAH S.Sos., M.Kom."
+        },
+        {
+          "id": "d4f1b029-7e49-48ac-be11-1aa5bf5da6aa",
+          "kode_course": "20261-07TPLP003-22TIF0422",
+          "coursename": "[2] ETIKA PROFESI # 07TPLP003 (Jumat) [P-1]",
+          "shortname": "55201-22TIF0422-07TPLP003-20261-",
+          "id_mata_kuliah": "22TIF0422",
+          "id_prodi": "55201",
+          "id_semester_registrasi": "20261",
+          "id_periode": "1",
+          "id_kelas": "07TPLP003",
+          "id_shift": "P",
+          "id_hari_waktu_kuliah": "5",
+          "nama_hari": "Jumat",
+          "nama_mata_kuliah": "ETIKA PROFESI",
+          "sks": 2,
+          "createdAt": "2026-08-28T21:54:15.902Z",
+          "nama_dosen": "Dr. MUHAMMAD YUNUS RANGKUTI S.Kom., M.Kom."
+        },
+        {
+          "id": "4c607c13-bef0-4089-a9fe-8c3e72e36781",
+          "kode_course": "20261-07TPLP003-22TIF0433",
+          "coursename": "[3] PEMROGRAMAN WEB II # 07TPLP003 (Rabu) [P-1]",
+          "shortname": "55201-22TIF0433-07TPLP003-20261-",
+          "id_mata_kuliah": "22TIF0433",
+          "id_prodi": "55201",
+          "id_semester_registrasi": "20261",
+          "id_periode": "1",
+          "id_kelas": "07TPLP003",
+          "id_shift": "P",
+          "id_hari_waktu_kuliah": "3",
+          "nama_hari": "Rabu",
+          "nama_mata_kuliah": "PEMROGRAMAN WEB II",
+          "sks": 3,
+          "createdAt": "2026-08-28T21:54:15.902Z",
+          "nama_dosen": "OCTAVIANA ANUGRAH ADE PURNAMA S.Kom., M.Kom."
+        }
+      ],
+      "limit": 12,
+      "page": 1,
+      "total": 8,
+      "semester": "20261"
+    }
+  },
+  {
+    "url": "https://mentari.unpam.ac.id/api/semester?page=1&limit=10000&t=1791003460673",
+    "status": 200,
+    "data": {
+      "data": [
+        {
+          "semester": "20261",
+          "nama_semester": "GANJIL 2026/2027",
+          "active": true,
+          "createdAt": "2026-08-27T09:17:46.401Z"
+        },
+        {
+          "semester": "20256",
+          "nama_semester": "GENAP 2025/2026 ANTARA",
+          "active": false,
+          "createdAt": "2026-06-24T07:55:27.948Z"
+        },
+        {
+          "semester": "20252",
+          "nama_semester": "GENAP 2025/2026",
+          "active": false,
+          "createdAt": "2024-11-28T06:49:29.918Z"
+        },
+        {
+          "semester": "20251",
+          "nama_semester": "GANJIL 2025/2026",
+          "active": false,
+          "createdAt": "2024-11-28T06:49:29.918Z"
+        },
+        {
+          "semester": "20246",
+          "nama_semester": "GENAP 2024/2025 ANTARA",
+          "active": false,
+          "createdAt": "2024-11-28T06:49:29.918Z"
+        },
+        {
+          "semester": "20242",
+          "nama_semester": "GENAP 2024/2025",
+          "active": false,
+          "createdAt": "2024-11-28T06:49:29.918Z"
+        }
+      ],
+      "limit": 10000,
+      "page": 1,
+      "total": 6
+    }
+  }
+]
