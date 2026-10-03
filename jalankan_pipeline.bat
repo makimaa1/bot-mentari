@@ -1,6 +1,8 @@
 @echo off
 title Mentari LMS - Full Learning Pipeline
 cd /d "%~dp0"
+set "MENTARI_PYTHON=python"
+if exist ".venv\Scripts\python.exe" set "MENTARI_PYTHON=.venv\Scripts\python.exe"
 echo =====================================================================
 echo    MENTARI LMS - PIPELINE PEMBELAJARAN LENGKAP & OTOMATIS
 echo    Alur: [1] Pre-Test -^> [2] Materi -^> [3] Fordis -^> [4] Post-Test -^> [5] Kuesioner
@@ -23,5 +25,5 @@ if "%pertemuan_num%"=="" set pertemuan_num=2
 
 echo.
 echo [*] Memulai Pipeline Pembelajaran untuk Matkul #%matkul_id% Pertemuan %pertemuan_num%...
-python pipeline_runner.py %matkul_id% %pertemuan_num%
+"%MENTARI_PYTHON%" pipeline_runner.py %matkul_id% %pertemuan_num%
 pause

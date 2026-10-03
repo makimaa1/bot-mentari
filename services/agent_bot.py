@@ -3,6 +3,7 @@ import sys
 import json
 import re
 import subprocess
+import functools
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -58,13 +59,15 @@ COURSE_WEIGHTS = {
     "8": [("pemrograman web ii", 18), ("pemrograman web 2", 18), ("pemrograman web", 15), ("pemweb ii", 15), ("pemweb 2", 15), ("web ii", 15), ("web 2", 15), ("pemweb", 10), ("web", 5)]
 }
 
-def resolve_course_key(query: str) -> tuple[str, str]:
+def resolve_course_key(query: str, strict: bool = False) -> tuple[str, str]:
     """
     Menyelesaikan nama mata kuliah / alias / singkatan / nomor ke kunci resmi ('1'-'8')
     dan nama mata kuliah kanonikal secara deterministik dan anti-salah.
     Mencegah salah target (misal: 'keamanan jaringan' salah ke 'arsitektur komputer').
     """
     if not query:
+        if strict:
+            raise ValueError("Mata kuliah belum disebutkan.")
         return "1", COURSES_MAP["1"]
     q = str(query).strip().lower()
 
@@ -91,8 +94,12 @@ def resolve_course_key(query: str) -> tuple[str, str]:
 
     best_key = max(scores, key=lambda k: scores[k])
     if scores[best_key] > 0:
+        if strict and sum(value == scores[best_key] for value in scores.values()) > 1:
+            raise ValueError("Nama mata kuliah ambigu; sebutkan satu mata kuliah.")
         return best_key, COURSES_MAP[best_key]
 
+    if strict:
+        raise ValueError("Mata kuliah tidak dikenal; gunakan nama atau nomor 1-8.")
     return "1", COURSES_MAP["1"]
 
 
@@ -247,33 +254,8 @@ def get_live_forum(course_name: str, meeting_num: int, allow_live: bool = True) 
         return None
 
     if data.get("status") == "aktif":
-        try:
-            dosen = ""
-            if COURSES_METADATA_PATH.exists():
-                meta = json.load(open(COURSES_METADATA_PATH, encoding="utf-8"))
-                dosen = meta.get(canon, {}).get("dosen", "")
-            mine = [p for p in data.get("posts", []) if p.get("is_me")]
-            entry = {
-                "course": canon, "pertemuan": int(meeting_num), "dosen": dosen,
-                "topic": data.get("title", ""),
-                "lecturer_instruction": extract_question_section(data.get("lecturer_post", "")),
-                "has_answered": bool(mine), "total_replies": len(mine),
-                "my_submissions": [{"reply_index": i + 1, "timestamp": p.get("date", ""), "content": p.get("text", "")}
-                                   for i, p in enumerate(mine)],
-                "note": "Disinkronkan langsung dari web Mentari.",
-            }
-            fd = []
-            if FORUM_DETAILS_PATH.exists():
-                try:
-                    fd = json.load(open(FORUM_DETAILS_PATH, encoding="utf-8"))
-                except Exception:
-                    fd = []
-            fd = [x for x in fd if not (x.get("course") == canon and x.get("pertemuan") == int(meeting_num))]
-            fd.append(entry)
-            with open(FORUM_DETAILS_PATH, "w", encoding="utf-8") as f:
-                json.dump(fd, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
+        from scrape_forum_live import save_cache
+        save_cache(data)
     return data
 
 
@@ -464,7 +446,7 @@ def tool_get_meeting_summary(course_name: str, meeting_num: int = 2) -> str:
             with open(MEETING_GRADES_PATH, encoding="utf-8") as f:
                 mg_data = json.load(f)
                 for k, v in mg_data.items():
-                    if c_name.lower() in k.lower() or any(w in k.lower() for w in c_name.lower().split() if len(w) > 3):
+                    if c_name.casefold() == k.casefold():
                         meeting_grades = v.get("meetings", {}).get(f"Pertemuan {meeting_num}", {})
                         break
         except Exception:
@@ -485,8 +467,8 @@ def tool_get_meeting_summary(course_name: str, meeting_num: int = 2) -> str:
     has_my_post = False
     reply_count = 0
     if forum_detail:
-        has_my_post = forum_detail.get("has_answered", False)
         reply_count = forum_detail.get("total_replies", len(forum_detail.get("my_submissions", [])))
+        has_my_post = reply_count >= forum_detail.get('required_replies', 3)
 
     lines = [
         f"📊 *RINGKASAN STATUS PERTEMUAN {meeting_num}*",
@@ -512,6 +494,8 @@ def tool_get_meeting_summary(course_name: str, meeting_num: int = 2) -> str:
     if forum and "belum tersedia" not in forum.get("title", "").lower() and forum.get("buttons"):
         if has_my_post:
             lines.append(f"  3. 💬 *Forum Diskusi (Fordis)*: ✅ *Sudah Dijawab* ({reply_count}x Reply)")
+        elif reply_count:
+            lines.append(f"  3. 💬 *Forum Diskusi (Fordis)*: 🟡 Belum lengkap ({reply_count} balasan)")
         else:
             lines.append("  3. 💬 *Forum Diskusi (Fordis)*: 🟡 *Aktif (Ada Soal Dosen)* - Belum kamu jawab")
     elif forum and "belum tersedia" in forum.get("title", "").lower():
@@ -775,7 +759,7 @@ def tool_check_pending_tasks(course_name: str = "") -> str:
                 comps = []
                 if res["pre_txt"] == "Belum Dikerjakan ⏳":
                     comps.append("Pre-Test ⏳")
-                if res["fordis_txt"] == "Belum Dijawab 💬":
+                if res["fordis_txt"].startswith(("Belum Dijawab", "Belum Lengkap")):
                     comps.append("Fordis 💬")
                 if res["post_txt"] == "Belum Dikerjakan ⏳":
                     comps.append("Post-Test 🎯")
@@ -787,7 +771,7 @@ def tool_check_pending_tasks(course_name: str = "") -> str:
 
             elif res["state"] == "BELUM DIMULAI ⭕" and not next_meeting_marked:
                 # Cek apakah ada fordis aktif yang belum dijawab
-                if res["fordis_txt"] == "Belum Dijawab 💬":
+                if res["fordis_txt"].startswith(("Belum Dijawab", "Belum Lengkap")):
                     pending_items.append(f"• *Pertemuan {p}*: Fordis 💬 (Ada Soal Dosen)")
                 elif m.get("pretest"):
                     pending_items.append(f"• *Pertemuan {p}* [Pertemuan Terbuka Selanjutnya]: Pre-Test ⏳")
@@ -834,45 +818,19 @@ def build_meeting_recap_data(c_name: str, m: dict, meeting_grades: dict, forum_d
     pre_done = pre_g is not None or (pre_obj.get("status") == "Selesai")
     post_done = post_g is not None or (post_obj.get("status") == "Selesai")
 
-    # Ambil data completion dari gradebook master
-    kue_comp = 0
-    pre_comp = 0
-    post_comp = 0
-    fordis_comp = 0
-    if gradebook_data:
-        gb_course = None
-        for g_k, g_v in gradebook_data.items():
-            if g_k.lower() in c_name.lower() or c_name.lower() in g_k.lower():
-                gb_course = g_v
-                break
-        if gb_course:
-            for comp in gb_course.get("components", []):
-                kode = comp.get("kode")
-                c_val = comp.get("completion", 0)
-                if kode == "KUESIONER":
-                    kue_comp = c_val
-                elif kode == "PRE_TEST":
-                    pre_comp = c_val
-                elif kode == "POST_TEST":
-                    post_comp = c_val
-                elif kode == "FORUM_DISKUSI":
-                    fordis_comp = c_val
-
-    # Evaluasi status kuesioner
-    kue_done = (kue_comp > 0 and p <= kue_comp) or post_done
-
-    # Fordis
+    # Aggregate counts do not identify which individual meetings were completed.
+    kue_done = (c_mg.get("kuesioner") or {}).get("status") == "Selesai"
     fordis_answered = False
+    fordis_complete = False
+    reply_count = 0
+    required_replies = 3
     for fd in forum_details:
         if fd.get("course") == c_name and fd.get("pertemuan") == p:
-            fordis_answered = fd.get("has_answered", False)
+            reply_count = fd.get("total_replies", len(fd.get("my_submissions", [])))
+            required_replies = fd.get("required_replies", 3)
+            fordis_answered = reply_count > 0
+            fordis_complete = reply_count >= required_replies
             break
-
-    # Sinkronisasi status kuis dari gradebook jika API quiz_peserta kosong
-    if not pre_done and pre_comp > 0 and p <= pre_comp:
-        pre_done = True
-    if not post_done and post_comp > 0 and p <= post_comp:
-        post_done = True
 
     # 1. Evaluasi Status Kelengkapan Pertemuan
     is_complete = False
@@ -896,9 +854,9 @@ def build_meeting_recap_data(c_name: str, m: dict, meeting_grades: dict, forum_d
     has_active_unanswered_fordis = (
         bool(fordis_audit)
         and "belum tersedia" not in fordis_audit.get("title", "").lower()
-        and not (fordis_answered or (fordis_comp > 0 and p <= fordis_comp))
+        and not fordis_complete
     )
-    if has_active_unanswered_fordis:
+    if has_active_unanswered_fordis or (kue_audit and not kue_done):
         is_complete = False
 
     has_activity = is_complete or pre_done or post_done or fordis_answered or (kue_done and bool(kue_audit))
@@ -928,13 +886,13 @@ def build_meeting_recap_data(c_name: str, m: dict, meeting_grades: dict, forum_d
     # 2.3 Fordis
     if not fordis_audit:
         fordis_txt = "(Ditiadakan Dosen) ℹ️" if is_complete else "(Tidak Ada) ℹ️"
-    elif fordis_answered or (fordis_comp > 0 and p <= fordis_comp):
+    elif fordis_complete:
         fordis_txt = "Sudah Dijawab ✅"
     elif "belum tersedia" in fordis_audit.get("title", "").lower():
         fordis_txt = "Belum Ada Soal Dosen ℹ️"
     else:
         # Fordis ada soal resmi dari dosen dan belum dijawab mahasiswa
-        fordis_txt = "Belum Dijawab 💬"
+        fordis_txt = f"Belum Lengkap ({reply_count}/{required_replies}) 💬" if reply_count else "Belum Dijawab 💬"
 
     # 2.4 Posttest
     if not post_audit:
@@ -949,10 +907,10 @@ def build_meeting_recap_data(c_name: str, m: dict, meeting_grades: dict, forum_d
     # 2.5 Kuesioner
     if not kue_audit:
         kue_txt = "(Tidak Ada) ℹ️"
-    elif kue_done or post_done or is_complete:
+    elif kue_done:
         kue_txt = "Selesai ✅"
     else:
-        kue_txt = "Belum Dikerjakan ⏳"
+        kue_txt = "Belum Terverifikasi ⏳"
 
     return {
         "pertemuan": p,
@@ -1231,12 +1189,19 @@ def tool_execute_learning_pipeline(course_name: str, meeting_target: str = "1", 
         target_c_key = "all"
         actual_course_name = "Seluruh 8 Mata Kuliah Mentari LMS"
     else:
-        target_c_key, actual_course_name = resolve_course_key(course_name)
+        try:
+            target_c_key, actual_course_name = resolve_course_key(course_name, strict=True)
+        except ValueError as exc:
+            return str(exc)
 
     step_clean = (target_step or "all").lower().strip()
     m_clean = str(meeting_target).strip()
 
     try:
+        from pipeline_runner import normalize_step, parse_meeting_targets
+        step_clean = normalize_step(step_clean)
+        if m_clean.lower() not in {"auto", "all", "semua", "seluruh"}:
+            m_clean = ','.join(map(str, parse_meeting_targets(m_clean)))
         from services.task_queue import enqueue_task
         q_res = enqueue_task(
             course_key=target_c_key,
@@ -1246,6 +1211,8 @@ def tool_execute_learning_pipeline(course_name: str, meeting_target: str = "1", 
         )
         pos = q_res.get("position", 1)
         total = q_res.get("total_in_queue", 1)
+        if q_res.get('status') == 'running':
+            return f"Tugas {actual_course_name} pertemuan {m_clean} ({step_clean}) sedang berjalan; perintah tidak diduplikasi."
         target_label = f"modul *{step_clean.upper()}*" if step_clean != "all" else "seluruh alur pembelajaran (Pre-Test ➡️ Materi ➡️ Fordis ➡️ Post-Test ➡️ Kuesioner)"
         meeting_label = f"Pertemuan {m_clean}" if m_clean not in ["all", "auto", "semua"] else "seluruh pertemuan yang tersedia"
 
@@ -1411,20 +1378,11 @@ def tool_get_course_schedule(course_name: str = "", day_name: str = "") -> str:
 import time
 
 # Daftar model aktif dengan prioritas model berkuota tinggi dan cepat
-ACTIVE_MODELS = [
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
-    "gemini-flash-lite-latest",
-    "gemini-3.5-flash",
-    "gemini-3.6-flash",
-    "gemini-3.7-flash",
-    "gemini-3.8-flash",
-    "gemini-3-flash-preview",
-    "gemini-3.1-flash-lite-preview",
-]
+from services.ai_solver import DEFAULT_MODEL, FALLBACK_MODELS
+ACTIVE_MODELS = list(dict.fromkeys([DEFAULT_MODEL, *FALLBACK_MODELS]))
 
 _model_cooldowns = {}
-_last_working_model = "gemini-3.5-flash-lite"
+_last_working_model = DEFAULT_MODEL
 _session_histories = {}  # session_id -> list of {"role": str, "text": str}
 
 # System Instruction untuk Mode Ngobrol Santai (Tanpa Tools, Alami & Asyik)
@@ -1548,17 +1506,21 @@ def detect_intent(query: str) -> str:
     3. 'CHAT'      : Obrolan santai, tanya-jawab umum, sapaan, curhat, diskusi koding/materi.
     """
     q = query.lower().strip()
+    if re.search(r'\b(jangan|batal|batalkan|stop|hentikan)\b', q):
+        return "LMS_INFO"
+    if re.search(r'\b(draf|draft|ide jawaban|sudah|udah|apakah|kenapa|mengapa|belum bisa)\b', q):
+        return "LMS_INFO"
 
     # 1. Perintah Eksekusi Otomasi di Laptop
     exec_verbs = [
         "kerjakan", "ngerjain", "mengerjakan", "jalankan", "eksekusi", "proses sekarang", "buka browser",
         "mulai kerjakan", "selesaikan pertemuan", "pindai ulang", "master scrape", "suruh ngerjain", "suruh kerjakan",
-        "bantu kerjakan", "tolong kerjakan", "garap"
+        "bantu kerjakan", "tolong kerjakan", "garap", "jawab fordis", "isi fordis", "isi forum diskusi", "jawab forum diskusi"
     ]
     has_exec_verb = any(v in q for v in exec_verbs)
     has_target = any(w in q for w in [
         "pertemuan", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10",
-        "p11", "p12", "p13", "p14", "kuis", "pipeline", "lms", "mentari", "posttest", "pretest", "fordis"
+        "p11", "p12", "p13", "p14", "kuis", "pipeline", "lms", "mentari", "posttest", "pretest", "fordis", "forum diskusi"
     ])
 
     if has_exec_verb and (has_target or "mentari" in q):
@@ -1646,11 +1608,10 @@ def get_agent_response(user_query: str, session_id: str = "default") -> str:
     """
     global _last_working_model
     from services.ai_solver import get_gemini_client
-    from google.genai import types
-
     client = get_gemini_client()
     if not client:
-        return "Halo! API Key Gemini belum diatur di server bot laptop. Silakan atur GEMINI_API_KEY di file .env."
+        return "Gemini belum tersedia. Periksa GEMINI_API_KEY di .env dan instalasi google-genai."
+    from google.genai import types
 
     intent = detect_intent(user_query)
 
@@ -1691,6 +1652,19 @@ def get_agent_response(user_query: str, session_id: str = "default") -> str:
             tool_get_course_schedule
         ]
         temp = 0.2
+
+    executed_actions = {}
+    if tools:
+        def once_per_request(fn):
+            @functools.wraps(fn)
+            def call(*args, **kwargs):
+                key = (fn.__name__, json.dumps([args, kwargs], sort_keys=True))
+                if key not in executed_actions:
+                    executed_actions[key] = fn(*args, **kwargs)
+                return executed_actions[key]
+            return call
+        tools = [once_per_request(fn) if fn in (tool_execute_learning_pipeline, tool_scrape_mentari) else fn
+                 for fn in tools]
 
     # Siapkan riwayat percakapan untuk session_id ini
     if session_id not in _session_histories:
@@ -1741,7 +1715,11 @@ def get_agent_response(user_query: str, session_id: str = "default") -> str:
                 _model_cooldowns[model_name] = time.time() + 300  # Cooldown 5 menit
             elif "404" in err_str or "not found" in err_str:
                 _model_cooldowns[model_name] = time.time() + 86400
+            if executed_actions:
+                return '\n\n'.join(executed_actions.values())
             continue
+        if executed_actions:
+            return '\n\n'.join(executed_actions.values())
 
     # Fallback darurat cerdas jika seluruh koneksi AI sedang sibuk
     return emergency_fallback_handler(user_query, str(last_error), intent=intent)
@@ -1781,21 +1759,8 @@ def emergency_fallback_handler(user_query: str, error_msg: str, intent: str = "C
         return tool_get_meeting_summary(c_name or "MANAJEMEN PROYEK INFORMATIKA", p_num)
 
     # 5. Jika intent eksekusi
-    if intent == "EXECUTE" or any(w in q for w in ["kerjakan", "ngerjain", "mengerjakan", "jalankan", "eksekusi"]):
-        target_c_key = c_key
-
-        # Ekstrak target step yang diminta
-        t_step = "all"
-        if any(w in q for w in ["posttest", "post test", "post-test", "post tes"]):
-            t_step = "posttest"
-        elif any(w in q for w in ["pretest", "pre test", "pre-test", "pre tes"]):
-            t_step = "pretest"
-        elif any(w in q for w in ["fordis", "forum", "diskusi"]):
-            t_step = "fordis"
-        elif any(w in q for w in ["kuesioner", "kuisioner", "evaluasi"]):
-            t_step = "kuesioner"
-
-        return tool_execute_learning_pipeline(target_c_key, p_num, target_step=t_step)
+    if intent == "EXECUTE":
+        return "Respons AI terputus. Periksa antrean sebelum mengulang perintah; status eksekusi belum dapat dipastikan."
 
     # 6. Jika intent LMS Info umum
     if intent == "LMS_INFO":

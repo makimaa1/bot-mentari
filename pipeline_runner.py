@@ -16,10 +16,11 @@ from playwright.sync_api import sync_playwright
 from services.ai_solver import solve_multiple_choice, draft_forum_discussion
 from services.agent_bot import resolve_course_key
 
-AUTH_PATH = Path("data/auth.json").resolve()
-MASTER_AUDIT_PATH = Path("data/mentari_master_audit.json").resolve()
-MEETING_GRADES_PATH = Path("data/mentari_meeting_grades.json").resolve()
-DRAFTS_PATH = Path("data/forum_drafts.json").resolve()
+BASE_DIR = Path(__file__).resolve().parent
+AUTH_PATH = BASE_DIR / "data/auth.json"
+MASTER_AUDIT_PATH = BASE_DIR / "data/mentari_master_audit.json"
+MEETING_GRADES_PATH = BASE_DIR / "data/mentari_meeting_grades.json"
+DRAFTS_PATH = BASE_DIR / "data/forum_drafts.json"
 
 # Daftar 8 Mata Kuliah Aktif Mahasiswa (Kelas 07TPLP003)
 COURSES = {
@@ -128,66 +129,74 @@ def parse_meeting_targets(meeting_input, course_name: str = "", target_step: str
     Mengonversi input pertemuan fleksibel (int, list, '1,2', '1-3', 'p1 dan p2', 'all', 'auto')
     menjadi daftar integer nomor pertemuan terurut.
     """
+    if isinstance(meeting_input, bool):
+        raise ValueError("Nomor pertemuan harus bilangan positif.")
     if isinstance(meeting_input, int):
+        if meeting_input < 1:
+            raise ValueError("Nomor pertemuan harus bilangan positif.")
         return [meeting_input]
     if isinstance(meeting_input, list):
-        return sorted(list(set(int(x) for x in meeting_input if str(x).isdigit())))
+        return sorted({n for value in meeting_input for n in parse_meeting_targets(value)})
 
     m_str = str(meeting_input).strip().lower()
 
     # 1. Kasus: 'all' atau 'auto'
     if m_str in ["all", "auto", "semua", "seluruh"]:
-        audit_path = Path("data/mentari_master_audit.json")
-        grades_path = Path("data/mentari_meeting_grades.json")
-
+        from services.json_store import read_json
+        if not MASTER_AUDIT_PATH.exists():
+            raise ValueError("Data audit belum ada; jalankan pemindaian mata kuliah terlebih dahulu.")
+        audit = read_json(MASTER_AUDIT_PATH, [])
+        grades = read_json(MEETING_GRADES_PATH, {})
         all_meetings = []
-        if audit_path.exists():
-            try:
-                with open(audit_path, encoding="utf-8") as f:
-                    audit = json.load(f)
-                grades = {}
-                if grades_path.exists():
-                    with open(grades_path, encoding="utf-8") as f:
-                        grades = json.load(f)
+        for c in audit:
+            c_n = c.get("course_name", "")
+            if course_name and course_name.casefold() != c_n.casefold():
+                continue
+            c_grades = grades.get(c_n, {}).get("meetings", {})
+            for meeting in c.get("meetings", []):
+                number = meeting.get("pertemuan")
+                if not isinstance(number, int) or number < 1:
+                    continue
+                recorded = c_grades.get(f"Pertemuan {number}") or {}
+                step = normalize_step(target_step)
+                if step in ("pretest", "posttest"):
+                    result = recorded.get(step) or {}
+                    needed = bool(meeting.get(step)) and result.get("grade") is None and result.get("status") != "Selesai"
+                elif step == "fordis":
+                    forum = meeting.get("forum") or {}
+                    needed = bool(forum) and "belum tersedia" not in str(forum).lower()
+                elif step in ("materi", "kuesioner"):
+                    needed = bool(meeting.get(step))
+                else:
+                    # Quiz completion alone cannot prove that the forum is complete.
+                    needed = any(meeting.get(k) for k in ("pretest", "posttest", "forum", "materi", "kuesioner"))
+                if needed:
+                    all_meetings.append(number)
+        return sorted(set(all_meetings))
 
-                for c in audit:
-                    c_n = c.get("course_name", "")
-                    if course_name and course_name.lower() not in c_n.lower():
-                        continue
-                    c_grades = grades.get(c_n, {}).get("meetings", {})
-                    for m in c.get("meetings", []):
-                        p_num = m.get("pertemuan")
-                        m_grade = c_grades.get(f"Pertemuan {p_num}", {})
-                        if target_step in ["pretest", "pre", "pre-test"]:
-                            pre_done = m_grade.get("pretest", {}).get("grade") is not None
-                            if not pre_done and m.get("pretest"):
-                                all_meetings.append(p_num)
-                        elif target_step in ["posttest", "post", "post-test"]:
-                            post_done = m_grade.get("posttest", {}).get("grade") is not None
-                            if not post_done and m.get("posttest"):
-                                all_meetings.append(p_num)
-                        else:
-                            is_done = m_grade.get("pretest", {}).get("grade") is not None and (not m.get("posttest") or m_grade.get("posttest", {}).get("grade") is not None)
-                            if not is_done:
-                                all_meetings.append(p_num)
-            except Exception:
-                pass
-        return sorted(list(set(all_meetings))) if all_meetings else [1, 2]
+    m_str = re.sub(r'\b(?:pertemuan|p)\s*(?=\d)', '', m_str)
+    m_str = re.sub(r'\b(?:dan|and)\b|[,&;]', ' ', m_str)
+    m_str = re.sub(r'\s*[-–]\s*', '-', m_str)
+    tokens = m_str.split()
+    if not tokens or any(not re.fullmatch(r'\d+(?:-\d+)?', token) for token in tokens):
+        raise ValueError("Target pertemuan tidak valid. Contoh: 7, p1-p3, atau p1 dan p7.")
+    result = set()
+    for token in tokens:
+        bounds = [int(n) for n in token.split('-')]
+        start, end = bounds[0], bounds[-1]
+        if start < 1 or end < start or end - start > 100:
+            raise ValueError("Rentang pertemuan tidak valid.")
+        result.update(range(start, end + 1))
+    return sorted(result)
 
-    # 2. Kasus: Range seperti '1-3' atau '1 - 4' atau 'p1-p3'
-    range_match = re.search(r'(?:p|pertemuan\s*)?(\d+)\s*[-–]\s*(?:p|pertemuan\s*)?(\d+)', m_str)
-    if range_match:
-        start_m = int(range_match.group(1))
-        end_m = int(range_match.group(2))
-        if start_m <= end_m:
-            return list(range(start_m, end_m + 1))
 
-    # 3. Kasus: Deteksi seluruh angka dalam string (misal 'p1 dan p2', '1, 2', 'pertemuan 1 dan 2')
-    digits = re.findall(r'\d+', m_str)
-    if digits:
-        return sorted(list(set(int(d) for d in digits)))
-
-    return [1]
+def normalize_step(value: str) -> str:
+    step = re.sub(r'[\s_-]+', '', str(value).lower())
+    step = {'pre': 'pretest', 'pretes': 'pretest', 'post': 'posttest', 'posttes': 'posttest',
+            'forum': 'fordis', 'diskusi': 'fordis', 'forumdiskusi': 'fordis', 'kuisioner': 'kuesioner'}.get(step, step)
+    if step not in {'all', 'pretest', 'posttest', 'fordis', 'materi', 'kuesioner'}:
+        raise ValueError(f"Modul tidak dikenal: {value}")
+    return step
 
 
 def update_meeting_grade_record(course_name: str, meeting_num: int, quiz_type: str, grade: int | float | None, status: str = "Selesai"):
@@ -433,14 +442,15 @@ def ensure_meeting_expanded(page, meeting_num: int) -> bool:
     """
     p_container = page.locator(f'#PERTEMUAN_{meeting_num}').first
     if p_container.count() == 0:
-        p_container = page.locator(f'div:not([id*="course-index"]):not(.MuiDrawer-root *):has-text("Pertemuan {meeting_num}")').first
+        p_container = page.locator('.MuiAccordion-root').filter(
+            has=page.get_by_text(re.compile(rf'^Pertemuan\s+{meeting_num}$', re.I))).first
 
     if p_container.count() == 0:
         print(f"[!] Container Pertemuan {meeting_num} tidak ditemukan di halaman kelas.")
         return False
 
     # Cek apakah sudah terbuka (memiliki kartu modul .MuiPaper-root di dalamnya)
-    has_cards = p_container.locator('.MuiPaper-root').count() > 0
+    has_cards = p_container.locator('.MuiPaper-root:visible').count() > 0
     if not has_cards:
         print(f"[*] Membuka panel Pertemuan {meeting_num}...")
         summary_btn = p_container.locator('.op-accordion-summary, button, [role="button"]').first
@@ -466,8 +476,11 @@ def get_meeting_scope(page, meeting_num: int):
     if p_container.count() > 0:
         return p_container
 
-    p_box = page.locator(f'div:not([id*="course-index"]):not(.MuiDrawer-root *):has-text("Pertemuan {meeting_num}")').first
-    return p_box if p_box.count() > 0 else page
+    p_box = page.locator('.MuiAccordion-root').filter(
+        has=page.get_by_text(re.compile(rf'^Pertemuan\s+{meeting_num}$', re.I))).first
+    if p_box.count() == 0:
+        raise ValueError(f"Container Pertemuan {meeting_num} tidak ditemukan.")
+    return p_box
 
 
 def find_meeting_quiz_card(page, meeting_num: int, quiz_type: str = "PRETEST") -> dict:
@@ -475,10 +488,9 @@ def find_meeting_quiz_card(page, meeting_num: int, quiz_type: str = "PRETEST") -
     Mencari kartu kuis (PRETEST atau POSTTEST) secara presisi di dalam container pertemuan target.
     Menjamin tidak akan pernah tertukar antara Pre-Test dan Post-Test.
     """
-    ensure_meeting_expanded(page, meeting_num)
+    if not ensure_meeting_expanded(page, meeting_num):
+        return {"card": None, "button": None, "is_locked": False, "card_title": "", "restriction_note": "Pertemuan tidak ditemukan"}
     scope = get_meeting_scope(page, meeting_num)
-    if not scope or scope.count() == 0:
-        scope = page
 
     target_type = quiz_type.upper().strip()  # "PRETEST" atau "POSTTEST"
 
@@ -653,9 +665,11 @@ def solve_quiz_exam(page, quiz_label: str):
                 target_label.click(force=True)
                 print(f"    [V] Opsi {chr(65+chosen_index)} berhasil diklik dan dicentang di browser!")
             except Exception as e:
-                print(f"    [!] Gagal klik opsi: {e}")
+                raise RuntimeError(f"Gagal memilih jawaban soal {s_num}; kuis tidak disubmit.") from e
 
             page.wait_for_timeout(1000)
+        else:
+            raise RuntimeError(f"Opsi soal {s_num} tidak terbaca; kuis tidak disubmit.")
 
         # Jika belum soal terakhir, klik NEXT ke soal berikutnya
         if s_num < total_soal:
@@ -668,6 +682,8 @@ def solve_quiz_exam(page, quiz_label: str):
                 print(f"[*] Berpindah ke nomor {s_num+1} melalui panel Navigasi Soal...")
                 soal_nav_btns[s_num].click()
                 page.wait_for_timeout(2000)
+            else:
+                raise RuntimeError(f"Tidak dapat membuka soal {s_num + 1}; kuis tidak disubmit.")
 
     print("\n" + "=" * 80)
     print(f" [V] SELURUH SOAL {quiz_label} TELAH BERHASIL DIJAWAB OLEH AI GEMINI!")
@@ -717,8 +733,14 @@ def solve_quiz_exam(page, quiz_label: str):
     except Exception as e:
         print(f"    [!] Catatan saat membaca nilai kuis: {e}")
 
+    completed = False
+    if '/exam/' not in page.url:
+        completion = scrape_student_quiz_status(page)
+        completed = completion['is_done']
+        if completion.get('grade') is not None:
+            score_val = completion['grade']
     return {
-        "completed": True,
+        "completed": completed,
         "total_soal": total_soal,
         "grade": score_val
     }
@@ -832,7 +854,9 @@ def execute_single_meeting_pipeline(page, course: dict, target_meeting: int, ste
                                 page.wait_for_timeout(2500)
 
                         exam_res = solve_quiz_exam(page, "PRE-TEST")
-                        if exam_res.get("grade"):
+                        if not exam_res.get('completed'):
+                            status_pretest = 'Gagal: Penyelesaian kuis belum terverifikasi'
+                        elif exam_res.get("grade") is not None:
                             status_pretest = f"Sudah Dikerjakan AI (Nilai: {exam_res['grade']})"
                             update_meeting_grade_record(course["name"], target_meeting, "PRE-TEST", exam_res["grade"])
                         else:
@@ -918,101 +942,16 @@ def execute_single_meeting_pipeline(page, course: dict, target_meeting: int, ste
         print(" [TAHAP 3/5] FORUM DISKUSI (FORDIS)")
         print("=" * 80)
 
-        meeting_scope = get_meeting_scope(page, target_meeting)
-        cards_now = meeting_scope.locator('.MuiCard-root, .MuiPaper-root').all()
-        fordis_card = None
-        for c in cards_now:
-            cls = c.get_attribute("class") or ""
-            if "MuiAccordion-root" in cls or "MuiAccordionSummary-root" in cls:
-                continue
-            first_l = c.inner_text().strip().splitlines()[0] if c.inner_text().strip() else ""
-            if "forum" in first_l.lower():
-                fordis_card = c
-                break
-
-        if fordis_card:
-            f_btn = fordis_card.locator('button:has-text("FORUM")').first
-            if f_btn.count() > 0:
-                print("[*] Mengakses Forum Diskusi...")
-                f_btn.scroll_into_view_if_needed()
-                f_btn.click(force=True)
-                page.wait_for_timeout(3500)
-
-                print(f"[V] Berada di Halaman Forum: {page.url}")
-                forum_text = page.locator("body").inner_text()
-
-                if "soal forum diskusi belum tersedia" in forum_text.lower():
-                    print("    ℹ️ STATUS FORDIS: Soal diskusi belum disediakan oleh dosen pengampu.")
-                    status_fordis = "Belum Ada Soal Dosen"
-                else:
-                    print("    💬 STATUS FORDIS: Topik diskusi aktif!")
-                    # Cek apakah ada daftar thread topik di halaman forum (misal tabel dengan kolom JUDUL)
-                    topic_cells = page.locator("table td, tr td:first-child, a:has-text('Proyek'), a:has-text('Pertemuan')").all()
-                    thread_clicked = False
-                    for cell in topic_cells:
-                        c_txt = cell.inner_text().strip()
-                        if c_txt and c_txt != "-" and "JUDUL" not in c_txt and len(c_txt) > 3:
-                            print(f"    [*] Membuka thread topik spesifik: '{c_txt}'...")
-                            cell.click()
-                            page.wait_for_timeout(3500)
-                            thread_clicked = True
-                            forum_text = page.locator("body").inner_text()
-                            break
-
-                    # Ekstrak konten diskusi dosen yang sebenarnya
-                    topic_lines = [l.strip() for l in forum_text.splitlines() if l.strip()]
-                    topic_content = "Topik Diskusi Pertemuan " + str(target_meeting)
-                    for l in topic_lines:
-                        # Prioritaskan baris materi/penjelasan dosen
-                        if len(l) > 40 and not any(skip in l for skip in ["DASHBOARD", "COURSES", "Course Index", "Participant", "Min Replay", "REFRESH", "BACK"]):
-                            topic_content = l
-                            break
-
-                    print(f"    [*] Topik: {topic_content[:100]}...")
-                    print("[*] AI Gemini sedang menyusun draf tanggapan akademik berbobot...")
-
-                    draft = draft_forum_discussion(
-                        topic=topic_content,
-                        context=lecturer_notes if lecturer_notes else f"Mata Kuliah {course['name']} Pertemuan {target_meeting}"
-                    )
-
-                    print("\n" + "-" * 75)
-                    print("           DRAF TANGGAPAN FORUM DISKUSI DARI GEMINI AI")
-                    print("-" * 75)
-                    print(draft)
-                    print("-" * 75)
-
-                    # Simpan draf ke data/forum_drafts.json
-                    DRAFTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-                    existing_drafts = []
-                    if DRAFTS_PATH.exists():
-                        try:
-                            with open(DRAFTS_PATH, encoding="utf-8") as f:
-                                existing_drafts = json.load(f)
-                        except Exception:
-                            pass
-
-                    existing_drafts.append({
-                        "course": course["name"],
-                        "pertemuan": target_meeting,
-                        "topic": topic_content,
-                        "draft": draft,
-                        "url": page.url
-                    })
-
-                    with open(DRAFTS_PATH, "w", encoding="utf-8") as f:
-                        json.dump(existing_drafts, f, indent=2, ensure_ascii=False)
-
-                    print(f"[V] Draf tanggapan disimpan ke: {DRAFTS_PATH}")
-
-                # Kembali ke halaman kelas
-                print("\n[*] Kembali ke halaman pertemuan...")
-                page.goto(course["url"], wait_until="domcontentloaded", timeout=45000)
-                ensure_turnstile_cleared(page)
-                page.wait_for_timeout(3000)
-                ensure_meeting_expanded(page, target_meeting)
-        else:
-            print("[*] Pertemuan ini tidak memiliki Forum Diskusi.")
+        from services.forum import execute_forum
+        try:
+            status_fordis = execute_forum(page, course, target_meeting, lecturer_notes)
+        except Exception as exc:
+            status_fordis = f"Gagal: {exc}"
+            print(f"[!] {status_fordis}")
+        finally:
+            page.goto(course["url"], wait_until="domcontentloaded", timeout=45000)
+            ensure_turnstile_cleared(page)
+            ensure_meeting_expanded(page, target_meeting)
     else:
         print(f"\n[*] Melewati modul Forum Diskusi (Target eksekusi yang diminta: '{target_step}').")
 
@@ -1109,7 +1048,9 @@ def execute_single_meeting_pipeline(page, course: dict, target_meeting: int, ste
                                 page.wait_for_timeout(2500)
 
                         exam_res = solve_quiz_exam(page, "POST-TEST")
-                        if exam_res.get("grade"):
+                        if not exam_res.get('completed'):
+                            status_posttest = 'Gagal: Penyelesaian kuis belum terverifikasi'
+                        elif exam_res.get("grade") is not None:
                             status_posttest = f"Sudah Dikerjakan AI (Nilai: {exam_res['grade']})"
                             update_meeting_grade_record(course["name"], target_meeting, "POST-TEST", exam_res["grade"])
                         else:
@@ -1194,7 +1135,8 @@ def execute_single_meeting_pipeline(page, course: dict, target_meeting: int, ste
                     except Exception:
                         pass
 
-                status_kuesioner = "20 Butir Evaluasi Terisi ('Ya')"
+                selected = page.locator("input[type='radio']:checked").count()
+                status_kuesioner = f"{selected} butir terisi; belum disubmit"
                 print(f"    [V] Opsi evaluasi 'Ya' telah terisi dengan rapi.")
                 print(f"    [!] Standar Keamanan: Bot tidak menekan submit kuesioner otomatis agar Anda dapat meninjau.")
         else:
@@ -1231,7 +1173,7 @@ def execute_single_meeting_pipeline(page, course: dict, target_meeting: int, ste
 
 
 def run_pipeline(course_choice: str = "1", target_meeting: str | int = 2, target_step: str = "all", headless: bool = False, interactive: bool = True):
-    step_clean = (target_step or "all").lower().strip()
+    step_clean = normalize_step(target_step)
 
     # Tentukan daftar mata kuliah yang akan diproses
     course_q = str(course_choice).strip().lower()
@@ -1239,8 +1181,8 @@ def run_pipeline(course_choice: str = "1", target_meeting: str | int = 2, target
         courses_to_process = list(COURSES.values())
         print(f"[*] Mode Batch Multi-Matkul: Memproses seluruh {len(courses_to_process)} mata kuliah!")
     else:
-        resolved_key, _ = resolve_course_key(str(course_choice))
-        courses_to_process = [COURSES.get(resolved_key, COURSES["1"])]
+        resolved_key, _ = resolve_course_key(str(course_choice), strict=True)
+        courses_to_process = [COURSES[resolved_key]]
 
     print("=" * 85)
     print("     MENTARI LMS - COMPLETE LEARNING PIPELINE ENGINE")
@@ -1255,8 +1197,7 @@ def run_pipeline(course_choice: str = "1", target_meeting: str | int = 2, target
     print("=" * 85)
 
     if not AUTH_PATH.exists():
-        print("[!] File data/auth.json tidak ditemukan. Jalankan save_auth.py terlebih dahulu.")
-        return
+        raise FileNotFoundError("File data/auth.json tidak ditemukan. Jalankan save_auth.py terlebih dahulu.")
 
     with sync_playwright() as p:
         try:
@@ -1281,6 +1222,11 @@ def run_pipeline(course_choice: str = "1", target_meeting: str | int = 2, target
         page.goto("https://mentari.unpam.ac.id", wait_until="domcontentloaded", timeout=60000)
         ensure_turnstile_cleared(page)
         page.wait_for_timeout(2000)
+        from services.auth import check_session_validity
+        if not check_session_validity(page):
+            browser.close()
+            raise RuntimeError("Sesi Mentari kedaluwarsa. Jalankan save_auth.py untuk login ulang.")
+        failures = []
 
         for course in courses_to_process:
             print("\n" + "=" * 85)
@@ -1301,8 +1247,11 @@ def run_pipeline(course_choice: str = "1", target_meeting: str | int = 2, target
                     page.goto(course["url"], wait_until="domcontentloaded", timeout=60000)
                     ensure_turnstile_cleared(page)
                     page.wait_for_timeout(2500)
-                    execute_single_meeting_pipeline(page, course, m_num, step_clean, target_step)
+                    result = execute_single_meeting_pipeline(page, course, m_num, step_clean, target_step)
+                    if any(str(value).startswith(("Gagal", "Belum Lengkap")) for value in result.values()):
+                        failures.append(f"{course['name']} P{m_num}: {result}")
                 except Exception as m_err:
+                    failures.append(f"{course['name']} P{m_num}: {m_err}")
                     print(f"[!] Error saat mengeksekusi Pertemuan {m_num}: {m_err}")
                     print("    -> Melanjutkan ke pertemuan berikutnya tanpa menghentikan bot...")
 
@@ -1325,64 +1274,33 @@ def run_pipeline(course_choice: str = "1", target_meeting: str | int = 2, target
             page.wait_for_timeout(5000)
 
         browser.close()
+        if failures:
+            raise RuntimeError("Sebagian tugas gagal: " + '; '.join(failures))
         print("[*] Selesai tuntas.")
 
 
 def process_queue_worker(headless: bool = False, interactive: bool = False):
-    """
-    Worker antrean terpusat: Mengambil tugas satu per satu dari data/pipeline_queue.json
-    dan mengeksekusinya secara berurutan dalam 1 sesi browser yang tertib dan aman.
-    """
-    queue_file = Path("data/pipeline_queue.json")
-    lock_file = Path("data/pipeline_queue.lock")
-
-    with open(lock_file, "w", encoding="utf-8") as f:
-        json.dump({"pid": os.getpid(), "started_at": time.time()}, f, indent=2)
-
+    from services import task_queue as queue
+    from services.json_store import file_lock, read_json
     try:
         while True:
-            if not queue_file.exists():
+            task = queue.take_next_task()
+            if task is None:
                 break
-
+            print(f"[*] Memproses {task['course_name']} / {task['meeting_target']} / {task['target_step']}")
+            error = None
             try:
-                with open(queue_file, "r", encoding="utf-8") as f:
-                    tasks = json.load(f)
-            except Exception:
-                tasks = []
-
-            if not tasks:
-                break
-
-            current_task = tasks.pop(0)
-
-            with open(queue_file, "w", encoding="utf-8") as f:
-                json.dump(tasks, f, indent=2, ensure_ascii=False)
-
-            print("\n" + "=" * 85)
-            print(f"[*] MEMPROSES TUGAS DARI ANTREAN:")
-            print(f"[*] Mata Kuliah : {current_task.get('course_name')}")
-            print(f"[*] Pertemuan   : {current_task.get('meeting_target')}")
-            print(f"[*] Modul       : {current_task.get('target_step')}")
-            print(f"[*] Sisa Antrean: {len(tasks)} tugas menunggu")
-            print("=" * 85)
-
-            try:
-                run_pipeline(
-                    course_choice=current_task.get("course_key", "1"),
-                    target_meeting=current_task.get("meeting_target", "1"),
-                    target_step=current_task.get("target_step", "all"),
-                    headless=headless,
-                    interactive=interactive
-                )
-            except Exception as task_err:
-                print(f"[!] Error saat memproses tugas antrean: {task_err}")
-
+                run_pipeline(task['course_key'], task['meeting_target'], task['target_step'],
+                             headless=headless, interactive=interactive)
+            except Exception as exc:
+                error = exc
+                print(f"[!] Tugas gagal: {exc}")
+            queue.finish_task(task, error)
     finally:
-        try:
-            lock_file.unlink(missing_ok=True)
-        except Exception:
-            pass
-        print("[*] Seluruh antrean pengerjaan telah selesai diproses.")
+        with file_lock(str(queue.QUEUE_FILE) + '.guard'):
+            state = read_json(queue.LOCK_FILE, {})
+            if state.get('pid') == os.getpid():
+                queue.LOCK_FILE.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

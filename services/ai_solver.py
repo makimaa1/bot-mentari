@@ -8,6 +8,7 @@ env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 _client = None
+DEFAULT_MODEL = os.getenv('GEMINI_MODEL', 'gemini-3.5-flash-lite').strip()
 
 import time
 
@@ -27,7 +28,7 @@ FALLBACK_MODELS = [
 _model_cooldowns = {}
 
 
-def get_available_models(preferred_model: str = "gemini-3.5-flash-lite") -> list:
+def get_available_models(preferred_model: str = DEFAULT_MODEL) -> list:
     """Mengembalikan daftar model yang siap pakai tanpa yang sedang terkena limit kuota (429)."""
     now = time.time()
     ordered = [preferred_model] + [m for m in FALLBACK_MODELS if m != preferred_model]
@@ -53,7 +54,7 @@ def get_gemini_client():
         return None
 
 
-def generate_content_with_fallback(client, prompt: str, preferred_model: str = "gemini-3.5-flash-lite") -> str:
+def generate_content_with_fallback(client, prompt: str, preferred_model: str = DEFAULT_MODEL) -> str:
     """Mengirim prompt ke Gemini dengan mekanisme failover ke model cadangan jika server 503/429/sibuk."""
     models_to_try = get_available_models(preferred_model)
     last_error = None
@@ -77,10 +78,10 @@ def generate_content_with_fallback(client, prompt: str, preferred_model: str = "
 
     if last_error:
         raise last_error
-    return "Tidak ada respons dari model AI."
+    raise RuntimeError("Model AI tidak mengembalikan jawaban.")
 
 
-def solve_multiple_choice(question: str, options: list[str], model: str = "gemini-3.5-flash-lite") -> dict:
+def solve_multiple_choice(question: str, options: list[str], model: str = DEFAULT_MODEL) -> dict:
     """
     Menganalisis soal kuis pilihan ganda menggunakan model penalaran
     dan mengembalikan opsi yang paling tepat beserta indeksnya untuk diklik secara otomatis di browser.
@@ -93,15 +94,11 @@ def solve_multiple_choice(question: str, options: list[str], model: str = "gemin
     Returns:
         Dict: {"index": int, "answer": str, "reason": str, "raw": str}
     """
+    if not options:
+        raise ValueError("Pilihan jawaban kuis kosong.")
     client = get_gemini_client()
-    
     if not client:
-        return {
-            "index": 0,
-            "answer": options[0] if options else "A",
-            "reason": "Mode simulasi otomatis (Setel GEMINI_API_KEY di file .env untuk analisis AI real-time).",
-            "raw": f"Jawaban: {options[0] if options else 'A'}\nAlasan: Mode simulasi"
-        }
+        raise RuntimeError("Gemini belum tersedia. Periksa GEMINI_API_KEY dan instalasi google-genai.")
     
     formatted_options = "\n".join(f"[{i}] {opt}" for i, opt in enumerate(options))
     prompt = f"""Kamu adalah Profesor dan Pakar Utama dalam bidang Teknik Informatika, Sistem Informasi, Rekayasa Perangkat Lunak, dan Manajemen Proyek TI.
@@ -131,8 +128,8 @@ ALASAN: <penjelasan ilmiah 1-2 kalimat mengapa opsi ini adalah jawaban yang bena
         ans_match = re.search(r'JAWABAN:\s*(.+)', raw_text, re.IGNORECASE)
         reas_match = re.search(r'ALASAN:\s*(.+)', raw_text, re.IGNORECASE)
         
-        chosen_idx = int(idx_match.group(1)) if idx_match else 0
-        chosen_ans = ans_match.group(1).strip() if ans_match else (options[chosen_idx] if options else "")
+        chosen_idx = int(idx_match.group(1)) if idx_match else -1
+        chosen_ans = ans_match.group(1).strip() if ans_match else ""
         reason = reas_match.group(1).strip() if reas_match else "Dipilih berdasarkan analisis konsep teknologi dan best practice."
 
         # Verifikasi silang akurat:
@@ -162,10 +159,9 @@ ALASAN: <penjelasan ilmiah 1-2 kalimat mengapa opsi ini adalah jawaban yang bena
                         break
 
             # 3. Validasi batas indeks
-            if chosen_idx >= len(options):
-                chosen_idx = 0
-            if not chosen_ans:
-                chosen_ans = options[chosen_idx]
+            if not 0 <= chosen_idx < len(options):
+                raise ValueError("Jawaban AI tidak memiliki indeks pilihan yang valid.")
+            chosen_ans = options[chosen_idx]
             
         return {
             "index": chosen_idx,
@@ -174,12 +170,7 @@ ALASAN: <penjelasan ilmiah 1-2 kalimat mengapa opsi ini adalah jawaban yang bena
             "raw": raw_text
         }
     except Exception as e:
-        return {
-            "index": 0,
-            "answer": options[0] if options else "A",
-            "reason": f"Gagal memanggil API Gemini: {e}",
-            "raw": str(e)
-        }
+        raise RuntimeError("Gagal mendapatkan jawaban kuis yang valid dari Gemini.") from e
 
 
 FEMALE_LECTURER_KEYWORDS = ["fifi julfiati"]  # Satu-satunya dosen perempuan (Kecakapan Antar Personal). Dosen lain laki-laki.
@@ -199,7 +190,7 @@ def draft_forum_discussion(
     course_name: str = "",
     dosen_name: str = "",
     class_questions: list = None,
-    model: str = "gemini-3.5-flash-lite"
+    model: str = DEFAULT_MODEL
 ) -> str:
     """
     Menghasilkan rangkaian 3 tanggapan forum diskusi (Fordis) Mentari LMS UNPAM
@@ -215,20 +206,7 @@ def draft_forum_discussion(
     class_questions = class_questions or []
 
     if not client:
-        return (
-            f"--- RESPON 1 (Menjawab Pertanyaan Dosen) ---\n"
-            f"Izin menjawab {honorific},\n\n"
-            f"Mengenai topik {topic[:60]}, pemahaman mendalam tentang konsep dasar dan implementasi arsitektur sistem "
-            f"sangat penting untuk mengoptimalkan kinerja komputasi dan meminimalisir bottleneck transfer data.\n\n"
-            f"--- RESPON 2 (Bertanya ke Dosen) ---\n"
-            f"Izin bertanya {honorific},\n\n"
-            f"Terkait penerapan konsep ini pada skala industri saat ini, kendala teknis apa yang paling sering "
-            f"dihadapi dan bagaimana strategi arsitektur yang paling efektif untuk mengatasinya?\n\n"
-            f"--- RESPON 3 (Menjawab Teman) ---\n"
-            f"Izin menjawab,\n\n"
-            f"Menanggapi diskusi rekan sekalian, saya sepakat bahwa pemilihan komponen dan pemahaman alur data "
-            f"sangat menentukan kestabilan sistem secara keseluruhan."
-        )
+        raise RuntimeError("Gemini belum tersedia. Periksa GEMINI_API_KEY dan instalasi google-genai.")
 
     context_str = f"\nKonteks Tambahan: {context}\n" if context else ""
     if class_questions:
@@ -281,35 +259,17 @@ Izin menjawab,
             raw_res = raw_res[raw_res.index("--- RESPON 1"):]
         return raw_res.strip()
     except Exception as e:
-        return (
-            f"--- RESPON 1 (Menjawab Pertanyaan Dosen) ---\n"
-            f"Izin menjawab {honorific},\n\n"
-            f"Mengenai materi {topic[:60]}, pemahaman alur kerja dan integrasi komponen merupakan fondasi utama "
-            f"dalam rekayasa sistem komputer modern. (Catatan AI: {e})\n\n"
-            f"--- RESPON 2 (Bertanya ke Dosen) ---\n"
-            f"Izin bertanya {honorific},\n\n"
-            f"Bagaimana perbandingan efisiensi pendekatan ini jika diterapkan pada infrastruktur modern saat ini?\n\n"
-            f"--- RESPON 3 (Menjawab Teman) ---\n"
-            f"Izin menjawab,\n\n"
-            f"Sepakat dengan pendapat rekan sekalian, optimalisasi arsitektur selalu membutuhkan keseimbangan antara performa dan sumber daya."
-        )
+        raise RuntimeError("Gagal membuat draf fordis dari Gemini; tidak ada jawaban yang dikirim.") from e
 
 
 def parse_forum_draft_responses(raw_draft: str) -> dict:
     """Memecah teks draft fordis menjadi 3 respon terpisah yang siap diposting ke web LMS Mentari."""
-    res1, res2, res3 = "", "", ""
-    parts = re.split(r'---\s*RESPON\s*\d+[^\n]*---', raw_draft)
-    cleaned_parts = [p.strip() for p in parts if p.strip()]
-
-    if len(cleaned_parts) >= 3:
-        res1 = cleaned_parts[0]
-        res2 = cleaned_parts[1]
-        res3 = cleaned_parts[2]
-    elif len(cleaned_parts) == 2:
-        res1 = cleaned_parts[0]
-        res2 = cleaned_parts[1]
-    elif len(cleaned_parts) == 1:
-        res1 = cleaned_parts[0]
+    headers = list(re.finditer(r'^\s*---\s*RESPON\s*([123])\b[^\n]*---\s*$', raw_draft, re.I | re.M))
+    responses = {}
+    for i, header in enumerate(headers):
+        end = headers[i + 1].start() if i + 1 < len(headers) else len(raw_draft)
+        responses[int(header.group(1))] = raw_draft[header.end():end].strip()
+    res1, res2, res3 = (responses.get(i, "") for i in (1, 2, 3))
 
     # Deteksi nama teman yang ditargetkan dari respon 3 (contoh: 'Untuk pertanyaan Naufal tadi...')
     target_friend = "teman"

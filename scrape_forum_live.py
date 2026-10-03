@@ -8,6 +8,7 @@ import json
 import time
 import re
 from pathlib import Path
+from services.json_store import edit_json
 
 if sys.stdout.encoding != "utf-8":
     try:
@@ -42,55 +43,49 @@ def parse_forum_text(body: str, student_name: str = STUDENT_NAME) -> dict:
             break
     lines = lines[start:]
 
-    # Pecah berdasarkan tombol REPLY
-    segments, cur = [], []
-    for l in lines:
-        if l.strip() == "REPLY":
-            segments.append(cur)
-            cur = []
-        else:
-            cur.append(l)
-    if any(x.strip() for x in cur):
-        segments.append(cur)
-
     result = {"lecturer_post": "", "lecturer_name": "", "posts": []}
-    if not segments:
+    reply_index = next((i for i, line in enumerate(lines) if line.strip().upper() == 'REPLY'), None)
+    if reply_index is None:
         return result
 
     # Segmen 0 = soal dosen (judul, nama dosen, tanggal, isi)
-    first = [l for l in segments[0] if l.strip() and l.strip() not in NOISE]
+    first = [l for l in lines[:reply_index] if l.strip() and l.strip() not in NOISE]
     if first:
         result["lecturer_name"] = first[1].strip() if len(first) > 1 else ""
         result["lecturer_post"] = "\n".join(first[3:] if len(first) > 3 else first).strip()
         if first:
             result["title"] = first[0].strip()
 
-    # Segmen berikutnya = balasan (inisial, nama, role, tanggal, isi)
-    for seg in segments[1:]:
-        seg = [l for l in seg if l.strip() != "FILE ATTACHMENT"]
-        idx = next((i for i, l in enumerate(seg) if l.strip() in ROLES), None)
-        if idx is None or idx < 1:
-            continue
-        author = seg[idx - 1].strip()
-        role = seg[idx].strip()
-        rest = seg[idx + 1:]
+    # Nested replies may omit their own REPLY button; author/role headers still exist.
+    reply_lines = lines[reply_index + 1:]
+    headers = [i for i, line in enumerate(reply_lines) if i > 0 and line.strip() in ROLES
+               and i + 1 < len(reply_lines)
+               and re.match(r'\s*(?:Senin|Selasa|Rabu|Kamis|Jumat|Sabtu|Minggu|\d)', reply_lines[i + 1], re.I)]
+    for number, idx in enumerate(headers):
+        end = headers[number + 1] - 1 if number + 1 < len(headers) else len(reply_lines)
+        if number + 1 < len(headers) and end > idx + 1 and re.fullmatch(r'[A-Z]{1,3}', reply_lines[end - 1].strip()):
+            end -= 1
+        author = reply_lines[idx - 1].strip()
+        role = reply_lines[idx].strip()
+        rest = [line for line in reply_lines[idx + 1:end] if line.strip().upper() not in NOISE]
         date = rest[0].strip() if rest else ""
         text = "\n".join(rest[1:]).strip()
         if not text:
             continue
-        is_me = student_name.lower() in author.lower()
+        is_me = bool(student_name.strip()) and student_name.strip().casefold() == author.casefold()
         result["posts"].append({
             "author": author, "role": role, "date": date, "text": text, "is_me": is_me,
         })
     return result
 
 
-def _open_forum(page, course: dict, meeting: int) -> str:
+def _open_forum(page, course: dict, meeting: int, navigate: bool = True) -> str:
     """Navigasi ke halaman forum pertemuan tertentu dan kembalikan teks body-nya."""
     import pipeline_runner as pr
-    page.goto(course["url"], wait_until="domcontentloaded", timeout=60000)
-    pr.ensure_turnstile_cleared(page)
-    page.wait_for_timeout(2500)
+    if navigate:
+        page.goto(course["url"], wait_until="domcontentloaded", timeout=60000)
+        pr.ensure_turnstile_cleared(page)
+        page.wait_for_timeout(2500)
     if not pr.ensure_meeting_expanded(page, meeting):
         return "__NO_MEETING__"
     scope = pr.get_meeting_scope(page, meeting)
@@ -104,12 +99,15 @@ def _open_forum(page, course: dict, meeting: int) -> str:
             if "belum tersedia" in txt.lower():
                 return "__NOT_AVAILABLE__"
             btn = c.locator('button:has-text("FORUM")').first
-            if btn.count() == 0:
-                return "__NOT_AVAILABLE__"
+            if btn.count() == 0 or not btn.is_enabled():
+                return "__LOCKED__"
             btn.scroll_into_view_if_needed()
             btn.click(force=True)
             page.wait_for_timeout(3500)
             body = page.locator("body").inner_text()
+            requirement = re.search(r'min(?:imum)?\s*repl(?:ay|y|ies)(?:\s+forum)?\s*[:=]?\s*(\d+)', body, re.I)
+            if 'soal forum diskusi belum tersedia' in body.lower():
+                return '__NOT_AVAILABLE__'
             # Jika halaman berupa daftar thread, buka thread pertama
             if "REPLY" not in body:
                 cell = page.locator("table tbody tr td").first
@@ -117,7 +115,9 @@ def _open_forum(page, course: dict, meeting: int) -> str:
                     cell.click()
                     page.wait_for_timeout(3500)
                     body = page.locator("body").inner_text()
-            return body
+            if not re.search(r'^\s*REPLY\s*$', body, re.M | re.I):
+                raise RuntimeError('Thread fordis belum terbuka atau sesi LMS sudah kedaluwarsa.')
+            return (f'Min Replay: {requirement.group(1)}\n' if requirement else '') + body
     return "__NO_FORUM__"
 
 
@@ -140,10 +140,11 @@ def scrape_forum_live(course_key: str, meeting: int, headless: bool = False) -> 
         try:
             body = _open_forum(page, course, int(meeting))
             if body.startswith("__"):
-                out["status"] = {"__NOT_AVAILABLE__": "belum_tersedia", "__NO_FORUM__": "tidak_ada",
+                out["status"] = {"__NOT_AVAILABLE__": "belum_tersedia", "__NO_FORUM__": "tidak_ada", '__LOCKED__': 'terkunci',
                                  "__NO_MEETING__": "pertemuan_tidak_ditemukan"}[body]
             else:
-                parsed = parse_forum_text(body)
+                from services.auth import extract_stored_credentials
+                parsed = parse_forum_text(body, extract_stored_credentials().get('fullname') or STUDENT_NAME)
                 out.update(parsed)
                 out["status"] = "aktif"
                 mine = [x for x in parsed["posts"] if x["is_me"]]
@@ -160,16 +161,23 @@ def scrape_forum_live(course_key: str, meeting: int, headless: bool = False) -> 
 
 
 def save_cache(entry: dict):
-    data = []
-    if LIVE_PATH.exists():
-        try:
-            data = json.loads(LIVE_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            data = []
-    data = [d for d in data if not (d.get("course") == entry["course"] and d.get("pertemuan") == entry["pertemuan"])]
-    data.append(entry)
-    LIVE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    LIVE_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    if entry.get('status') == 'error':
+        return
+    with edit_json(LIVE_PATH, []) as data:
+        data[:] = [d for d in data if not (d.get("course") == entry["course"] and d.get("pertemuan") == entry["pertemuan"])]
+        data.append(entry)
+    if entry.get('status') == 'aktif':
+        mine = [p for p in entry.get('posts', []) if p.get('is_me')]
+        detail = {'course': entry['course'], 'pertemuan': entry['pertemuan'],
+                  'topic': entry.get('title', ''), 'dosen': entry.get('lecturer_name', ''),
+                  'lecturer_instruction': entry.get('lecturer_post', ''), 'has_answered': bool(mine),
+                  'total_replies': len(mine), 'required_replies': entry.get('required_replies', 3),
+                  'scraped_at': entry.get('scraped_at'),
+                  'my_submissions': [{'reply_index': i + 1, 'timestamp': p.get('date', ''), 'content': p['text']}
+                                     for i, p in enumerate(mine)]}
+        with edit_json(LIVE_PATH.parent / 'mentari_forum_details.json', []) as details:
+            details[:] = [d for d in details if (d.get('course'), d.get('pertemuan')) != (entry['course'], entry['pertemuan'])]
+            details.append(detail)
 
 
 def load_cache(course_name: str, meeting: int):

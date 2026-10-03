@@ -20,7 +20,7 @@ from pipeline_runner import (
     find_meeting_quiz_card
 )
 
-AUTH_PATH = Path("data/auth.json").resolve()
+AUTH_PATH = Path(__file__).resolve().parent / "data/auth.json"
 COURSE_URL = "https://mentari.unpam.ac.id/u-courses/20261-07TPLP003-22TIF0312"  # Manajemen Proyek Informatika
 COURSE_NAME = "MANAJEMEN PROYEK INFORMATIKA"
 

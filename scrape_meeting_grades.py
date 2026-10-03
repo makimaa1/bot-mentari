@@ -9,9 +9,9 @@ import time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-AUTH_PATH = Path("data/auth.json").resolve()
-OUTPUT_FILE = Path("data/mentari_meeting_grades.json").resolve()
-GRADEBOOK_MASTER_FILE = Path("data/mentari_gradebook_master.json").resolve()
+AUTH_PATH = Path(__file__).resolve().parent / "data/auth.json"
+OUTPUT_FILE = Path(__file__).resolve().parent / "data/mentari_meeting_grades.json"
+GRADEBOOK_MASTER_FILE = Path(__file__).resolve().parent / "data/mentari_gradebook_master.json"
 
 def scrape_all_meeting_grades(target_course_name: str = None):
     print("=" * 70)
@@ -19,8 +19,7 @@ def scrape_all_meeting_grades(target_course_name: str = None):
     print("=" * 70)
 
     if not GRADEBOOK_MASTER_FILE.exists():
-        print(f"[!] File master gradebook tidak ditemukan: {GRADEBOOK_MASTER_FILE}")
-        return
+        raise FileNotFoundError("Data gradebook belum ada; jalankan master_scraper.py terlebih dahulu.")
 
     with open(GRADEBOOK_MASTER_FILE, "r", encoding="utf-8") as f:
         master_data = json.load(f)
@@ -35,17 +34,22 @@ def scrape_all_meeting_grades(target_course_name: str = None):
             all_course_grades = {}
 
     courses = []
+    canonical_name = None
+    if target_course_name:
+        from services.agent_bot import resolve_course_key
+        _, canonical_name = resolve_course_key(target_course_name, strict=True)
     for cname, cinfo in master_data.items():
         code = cinfo.get("course_code")
         if code:
             if target_course_name:
-                q = target_course_name.strip().lower()
-                if q in cname.lower() or any(w in cname.lower() for w in q.split() if len(w) > 3):
+                if canonical_name.casefold() == cname.casefold():
                     courses.append({"course_name": cname, "course_code": code})
             else:
                 courses.append({"course_name": cname, "course_code": code})
 
     print(f"[*] Total mata kuliah yang akan diproses: {len(courses)}")
+    if not courses:
+        raise ValueError('Tidak ada mata kuliah yang cocok untuk disinkronkan.')
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -75,9 +79,8 @@ def scrape_all_meeting_grades(target_course_name: str = None):
         }""")
 
         if not token:
-            print("[!] Token gagal diambil dari localStorage!")
             browser.close()
-            return
+            raise RuntimeError('Sesi Mentari tidak valid; login ulang dengan save_auth.py.')
 
         print(f"[V] Token berhasil didapatkan (panjang: {len(token)})")
 

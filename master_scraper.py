@@ -14,8 +14,8 @@ if sys.stdout.encoding != "utf-8":
 
 from playwright.sync_api import sync_playwright
 
-AUTH_PATH = Path("data/auth.json").resolve()
-OUTPUT_PATH = Path("data/mentari_master_audit.json").resolve()
+AUTH_PATH = Path(__file__).resolve().parent / "data/auth.json"
+OUTPUT_PATH = Path(__file__).resolve().parent / "data/mentari_master_audit.json"
 
 # Daftar 8 Mata Kuliah Aktif Mahasiswa (Kelas 07TPLP003)
 COURSES = [
@@ -123,19 +123,12 @@ def classify_card(title: str, text: str, buttons: list[str]) -> str:
 
 def scan_single_meeting(page, p_num: int) -> dict:
     """Memindai seluruh kartu dan komponen pembelajaran pada 1 pertemuan."""
-    p_header = page.locator(f'text=/^\\s*Pertemuan\\s+{p_num}\\b/i').first
-    if p_header.count() == 0:
-        return None
-
-    try:
-        p_header.scroll_into_view_if_needed()
-        p_header.click()
-        page.wait_for_timeout(1800)
-    except Exception:
+    from pipeline_runner import ensure_meeting_expanded, get_meeting_scope
+    if not ensure_meeting_expanded(page, p_num):
         return None
 
     # Ambil semua kartu konten yang aktif (bukan di sidebar Course Index)
-    raw_cards = page.locator('.MuiPaper-root:not(:has-text("Course Index"))').all()
+    raw_cards = get_meeting_scope(page, p_num).locator('.MuiPaper-root:visible').all()
 
     meeting_data = {
         "pertemuan": p_num,

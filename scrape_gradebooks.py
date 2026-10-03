@@ -5,8 +5,8 @@ import time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-AUTH_PATH = Path("data/auth.json").resolve()
-OUTPUT_PATH = Path("data/mentari_gradebook_master.json").resolve()
+AUTH_PATH = Path(__file__).resolve().parent / "data/auth.json"
+OUTPUT_PATH = Path(__file__).resolve().parent / "data/mentari_gradebook_master.json"
 
 COURSES = [
     {"id": "22TIF0312", "name": "MANAJEMEN PROYEK INFORMATIKA", "code": "20261-07TPLP003-22TIF0312", "total_meetings": 14},

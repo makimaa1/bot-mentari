@@ -80,6 +80,9 @@ def check_session_validity(page: Page) -> bool:
     # Jika diarahkan ke URL login
     if "login" in current_url:
         return False
+    title = page.title()
+    if isinstance(title, str) and any(marker in title.lower() for marker in ('just a moment', 'attention required')):
+        return False
 
     # Periksa keberadaan form password
     try:
@@ -91,8 +94,14 @@ def check_session_validity(page: Page) -> bool:
 
     # Periksa token di local storage melalui konteks browser
     try:
-        access_token = page.evaluate("() => localStorage.getItem('access')")
-        if access_token:
+        access_token = page.evaluate("""() => {
+            try {
+                const access = JSON.parse(localStorage.getItem('access'));
+                const user = Array.isArray(access) ? access[0] : access;
+                return user && user.token;
+            } catch (_) { return null; }
+        }""")
+        if isinstance(access_token, str) and access_token.strip():
             return True
     except Exception:
         pass
@@ -102,9 +111,6 @@ def check_session_validity(page: Page) -> bool:
         dashboard_indicators = [
             page.locator('button:has-text("Keluar")'),
             page.locator('a:has-text("Dashboard")'),
-            page.locator('header'),
-            page.locator('nav'),
-            page.locator('.sidebar'),
         ]
         for indicator in dashboard_indicators:
             if indicator.count() > 0:
@@ -112,4 +118,4 @@ def check_session_validity(page: Page) -> bool:
     except Exception:
         pass
 
-    return True
+    return False

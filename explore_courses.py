@@ -16,9 +16,9 @@ from playwright.sync_api import sync_playwright
 
 from services.ai_solver import draft_forum_discussion
 
-AUTH_PATH = Path("data/auth.json").resolve()
-OUTPUT_DATA_PATH = Path("data/courses_summary.json").resolve()
-DEEP_REPORT_PATH = Path("data/mentari_deep_data.json").resolve()
+AUTH_PATH = Path(__file__).resolve().parent / "data/auth.json"
+OUTPUT_DATA_PATH = Path(__file__).resolve().parent / "data/courses_summary.json"
+DEEP_REPORT_PATH = Path(__file__).resolve().parent / "data/mentari_deep_data.json"
 
 # Daftar kata kunci label sistem yang bukan nama mata kuliah
 EXCLUDED_LABELS = {

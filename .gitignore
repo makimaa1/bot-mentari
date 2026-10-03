@@ -1,5 +1,4 @@
 # Environment & Authentication
-save_auth.py
 .env
 data/
 *.token
@@ -22,3 +21,5 @@ env/
 # Binary & Executables
 *.exe
 cloudflared.exe
+.test-temp/
+.playwright-cli/

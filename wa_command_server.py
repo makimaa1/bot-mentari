@@ -6,6 +6,7 @@ import time
 import threading
 import subprocess
 import urllib.parse
+import hmac
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from dotenv import load_dotenv
@@ -30,6 +31,7 @@ CLOUDFLARED_PATH = BASE_DIR / "cloudflared.exe"
 
 tunnel_proc = None
 public_tunnel_url = ""
+_reply_lock = threading.Lock()
 
 
 def normalize_phone(phone: str) -> str:
@@ -46,7 +48,8 @@ def normalize_phone(phone: str) -> str:
 class FonnteWebhookHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # Format logging bersih di konsol
-        sys.stdout.write(f"[{time.strftime('%H:%M:%S')}] {format % args}\n")
+        message = re.sub(r'([?&]token=)[^\s&\"]+', r'\1[redacted]', format % args)
+        sys.stdout.write(f"[{time.strftime('%H:%M:%S')}] {message}\n")
 
     def do_GET(self):
         """Health check endpoint."""
@@ -65,8 +68,25 @@ class FonnteWebhookHandler(BaseHTTPRequestHandler):
         """Menerima pesan masuk dari Webhook WhatsApp Fonnte."""
         # Muat ulang .env secara dinamis agar perubahan nomor HP langsung aktif tanpa restart server
         load_dotenv(dotenv_path=env_path, override=True)
-
-        content_length = int(self.headers.get("Content-Length", 0))
+        request_url = urllib.parse.urlsplit(self.path)
+        if request_url.path != '/webhook':
+            self.send_response(404)
+            self.end_headers()
+            return
+        secret = os.getenv('WEBHOOK_SECRET', '').strip()
+        provided = urllib.parse.parse_qs(request_url.query).get('token', [''])[0]
+        if not secret or not hmac.compare_digest(provided, secret):
+            self.send_response(403)
+            self.end_headers()
+            return
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            content_length = -1
+        if not 0 < content_length <= 1024 * 1024:
+            self.send_response(400 if content_length <= 0 else 413)
+            self.end_headers()
+            return
         post_data = self.rfile.read(content_length).decode("utf-8", errors="ignore")
         content_type = self.headers.get("Content-Type", "")
 
@@ -78,6 +98,8 @@ class FonnteWebhookHandler(BaseHTTPRequestHandler):
         if "application/json" in content_type:
             try:
                 body = json.loads(post_data)
+                if not isinstance(body, dict):
+                    raise ValueError('Payload harus berupa object JSON.')
                 sender = body.get("sender", "")
                 user_message = body.get("message", "")
                 member = body.get("member", "")
@@ -98,7 +120,7 @@ class FonnteWebhookHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps({"status": True}).encode("utf-8"))
 
-        if not user_message:
+        if not all(isinstance(value, str) for value in (sender, member, user_message)) or not user_message:
             return
 
         # Ambil daftar nomor yang diizinkan dari .env
@@ -107,9 +129,12 @@ class FonnteWebhookHandler(BaseHTTPRequestHandler):
 
         # Deteksi apakah pesan berasal dari Grup WhatsApp
         is_group = "@g.us" in sender
-        actual_sender = member if member else sender
+        actual_sender = member if is_group else sender
         clean_actual = normalize_phone(actual_sender)
-        is_owner = any(allowed in clean_actual or clean_actual in allowed for allowed in allowed_numbers if allowed) if allowed_numbers else True
+        is_owner = bool(clean_actual) and clean_actual in allowed_numbers
+        if not is_owner:
+            print('[!] Pesan dari pengirim yang tidak diizinkan diabaikan.')
+            return
 
         # Jika pesan dari grup:
         if is_group:
@@ -166,14 +191,9 @@ class FonnteWebhookHandler(BaseHTTPRequestHandler):
         """Memproses query via Gemini Agent dan mengirimkan jawaban ke WA."""
         print("[*] Agen AI sedang menganalisis pesan dan memeriksa data Mentari...")
         try:
-            # Muat ulang services.agent_bot secara dinamis agar pembaruan data/kode langsung aktif
-            import importlib
-            import services.agent_bot
-            importlib.reload(services.agent_bot)
-
-            # Gunakan reply_target sebagai session_id agar riwayat obrolan bersambung per kontak/grup
-            session_key = reply_target if reply_target else "default_wa"
-            agent_reply = services.agent_bot.get_agent_response(user_message, session_id=session_key)
+            session_key = f'{reply_target}:{member}' if is_group else reply_target
+            with _reply_lock:
+                agent_reply = get_agent_response(user_message, session_id=session_key)
 
             # Jika di grup, tambahkan tag atau salam singkat ke pengirim
             if is_group and member:
@@ -185,7 +205,7 @@ class FonnteWebhookHandler(BaseHTTPRequestHandler):
             send_wa_message(agent_reply, target=reply_target)
         except Exception as e:
             print(f"[!] Gagal menghasilkan balasan: {e}")
-            err_msg = f"Maaf, ada kendala saat memproses permintaanmu: {e}"
+            err_msg = "Ada kendala saat memproses permintaan. Periksa log bot di laptop."
             send_wa_message(err_msg, target=reply_target)
 
 
@@ -241,6 +261,8 @@ def run_cli_test_mode():
 
 
 def run_server():
+    if not os.getenv('WEBHOOK_SECRET', '').strip() or not os.getenv('MY_WA_NUMBER', '').strip():
+        raise RuntimeError('Atur WEBHOOK_SECRET dan MY_WA_NUMBER di .env sebelum menjalankan server WhatsApp.')
     print("=" * 80)
     print("🚀 MENGAKTIFKAN SERVER MENTARI LMS WHATSAPP AI AGENT")
     print("=" * 80)
@@ -263,10 +285,10 @@ def run_server():
         tunnel_url = start_cloudflared_tunnel(PORT)
 
     if tunnel_url:
-        webhook_public = f"{tunnel_url}/webhook"
+        webhook_public = f"{tunnel_url}/webhook?" + urllib.parse.urlencode({'token': os.getenv('WEBHOOK_SECRET')})
         print("\n" + "=" * 80)
         print("🔗 URL WEBHOOK PUBLIK TERBENTUK:")
-        print(f"   👉  {webhook_public}")
+        print(f"   👉  {tunnel_url}/webhook (token disertakan saat sinkronisasi)")
         print("=" * 80)
 
         # Sinkronisasi otomatis ke dashboard Fonnte via API
@@ -279,12 +301,12 @@ def run_server():
                 print("✨ Kamu TIDAK PERLU lagi buka web Fonnte atau menyalin link manual!")
             else:
                 print(f"[!] Info sinkronisasi Fonnte: {res_up.get('reason', res_up)}")
-                print(f"    Jika diperlukan, URL manual: {webhook_public}")
+                print("    Tambahkan ?token=<WEBHOOK_SECRET> pada URL webhook saat mengatur Fonnte manual.")
         except Exception as e:
             print(f"[!] Sinkronisasi otomatis Fonnte dilewati: {e}")
         print("=" * 80 + "\n")
     else:
-        print(f"\n[*] Server aktif secara lokal di: http://localhost:{PORT}/webhook")
+        print(f"\n[*] Server aktif secara lokal di: http://localhost:{PORT}/webhook?token=<WEBHOOK_SECRET>")
         print("[!] Untuk menghubungkan ke Fonnte, gunakan tunneling seperti ngrok atau cloudflared.\n")
 
     server_address = ("0.0.0.0", PORT)
